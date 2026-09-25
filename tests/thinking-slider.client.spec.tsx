@@ -76,11 +76,11 @@ function renderSeat(props: SliderProps) {
   return { container, root }
 }
 
-function openPanel(container: HTMLDivElement): void {
-  const trigger = container.querySelector('[data-seat-trigger]') as HTMLButtonElement
+function openPanel(): void {
+  const trigger = document.body.querySelector('[data-seat-trigger]') as HTMLButtonElement
   expect(trigger).not.toBeNull()
   act(() => { trigger.click() })
-  expect(container.querySelector('[data-seat-panel]')).not.toBeNull()
+  expect(document.body.querySelector('[data-seat-panel]')).not.toBeNull()
 }
 
 function dispose(root: ReturnType<typeof createRoot>, container: HTMLDivElement): void {
@@ -97,14 +97,14 @@ describe('thinking slider composer seat', () => {
     const directory = createSnapshotStore(state())
     const { container, root } = renderSeat({ directory, t })
 
-    expect(container.querySelector('[data-seat-panel]')).toBeNull()
-    expect(container.querySelector('[data-seat-trigger]')?.textContent).toContain('DeepSeek-V4-Flash')
-    expect(container.querySelector('[data-seat-trigger]')?.textContent).toContain('High')
+    expect(document.body.querySelector('[data-seat-panel]')).toBeNull()
+    expect(document.body.querySelector('[data-seat-trigger]')?.textContent).toContain('DeepSeek-V4-Flash')
+    expect(document.body.querySelector('[data-seat-trigger]')?.textContent).toContain('High')
 
-    openPanel(container)
-    const reasoningHeader = container.querySelector('[data-seat-reasoning]')
-    const range = container.querySelector('[data-seat-input]')
-    const modelSelect = container.querySelector('[data-seat-model-select]')
+    openPanel()
+    const reasoningHeader = document.body.querySelector('[data-seat-reasoning]')
+    const range = document.body.querySelector('[data-seat-input]')
+    const modelSelect = document.body.querySelector('[data-seat-model-select]')
     expect(reasoningHeader).not.toBeNull()
     expect(range).not.toBeNull()
     expect(modelSelect).not.toBeNull()
@@ -117,17 +117,35 @@ describe('thinking slider composer seat', () => {
     dispose(root, container)
   })
 
+  it('keeps the trigger mounted as the placement anchor and positions the panel', () => {
+    const directory = createSnapshotStore(state())
+    const { container, root } = renderSeat({ directory, t })
+
+    openPanel()
+    // The panel is portaled and positioned from the trigger's rect, so the
+    // trigger must stay mounted; a removed anchor would leave the panel stuck
+    // on MEASURE_STYLE (visibility:hidden) and it would read as "disappeared".
+    const trigger = document.body.querySelector('[data-seat-trigger]')
+    expect(trigger).not.toBeNull()
+    const panel = document.body.querySelector('[data-seat-panel]') as HTMLElement
+    expect(panel).not.toBeNull()
+    expect(panel.style.visibility).not.toBe('hidden')
+    expect(panel.style.left).not.toBe('')
+
+    dispose(root, container)
+  })
+
   it('renders only the efforts the current model is configured with after opening', () => {
     const directory = createSnapshotStore(state())
     const { container, root } = renderSeat({ directory, t })
 
-    openPanel(container)
-    expect(container.textContent).toContain('DeepSeek-V4-Flash')
-    expect(container.textContent).toContain('Off')
-    expect(container.textContent).toContain('High')
-    expect(container.textContent).toContain('Max')
-    expect(container.textContent).not.toContain('minimal')
-    expect(container.textContent).not.toContain('low')
+    openPanel()
+    expect(document.body.textContent).toContain('DeepSeek-V4-Flash')
+    expect(document.body.textContent).toContain('Off')
+    expect(document.body.textContent).toContain('High')
+    expect(document.body.textContent).toContain('Max')
+    expect(document.body.textContent).not.toContain('minimal')
+    expect(document.body.textContent).not.toContain('low')
 
     dispose(root, container)
   })
@@ -142,9 +160,9 @@ describe('thinking slider composer seat', () => {
     }))
     const { container, root } = renderSeat({ directory, t })
 
-    openPanel(container)
-    expect(container.textContent).toContain('当前模型未提供推理档位')
-    expect(container.textContent).not.toContain('Off')
+    openPanel()
+    expect(document.body.textContent).toContain('当前模型未提供推理档位')
+    expect(document.body.textContent).not.toContain('Off')
 
     dispose(root, container)
   })
@@ -153,9 +171,9 @@ describe('thinking slider composer seat', () => {
     const directory = createSnapshotStore(state({ current: null, status: 'loading' }))
     const { container, root } = renderSeat({ directory, t })
 
-    expect(container.textContent).toContain('加载模型…')
-    openPanel(container)
-    expect(container.textContent).toContain('当前模型未提供推理档位')
+    expect(document.body.textContent).toContain('加载模型…')
+    openPanel()
+    expect(document.body.textContent).toContain('当前模型未提供推理档位')
 
     dispose(root, container)
   })
@@ -169,8 +187,8 @@ describe('thinking slider composer seat', () => {
     }))
     const { container, root } = renderSeat({ directory, t })
 
-    openPanel(container)
-    expect(container.textContent).toContain('模型目录加载失败：catalog unreachable')
+    openPanel()
+    expect(document.body.textContent).toContain('模型目录加载失败：catalog unreachable')
 
     dispose(root, container)
   })
@@ -180,8 +198,8 @@ describe('thinking slider composer seat', () => {
     const directory = createSnapshotStore(state())
     const { container, root } = renderSeat({ directory, select, t })
 
-    openPanel(container)
-    const input = container.querySelector('[data-seat-input]') as HTMLInputElement
+    openPanel()
+    const input = document.body.querySelector('[data-seat-input]') as HTMLInputElement
     act(() => { setRangeValue(input, '2') })
 
     expect(select).toHaveBeenCalledWith({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'max' })
@@ -192,8 +210,47 @@ describe('thinking slider composer seat', () => {
     const directory = createSnapshotStore(state())
     const { container, root } = renderSeat({ directory, t })
 
-    openPanel(container)
-    expect((container.querySelector('[data-seat-input]') as HTMLInputElement).getAttribute('aria-valuetext')).toBe('High')
+    openPanel()
+    expect((document.body.querySelector('[data-seat-input]') as HTMLInputElement).getAttribute('aria-valuetext')).toBe('High')
+
+    dispose(root, container)
+  })
+
+  it('portals the model menu to the body and positions it, so its material samples the page', () => {
+    const select = vi.fn().mockResolvedValue(true)
+    const directory = createSnapshotStore(state({
+      groups: [{
+        id: 'deepseek-official',
+        name: 'DeepSeek',
+        models: [
+          { id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash', reasoning },
+          { id: 'deepseek-v4-reasoner', name: 'DeepSeek-V4-Reasoner', reasoning },
+        ],
+      }],
+    }))
+    const { container, root } = renderSeat({ directory, select, t })
+
+    openPanel()
+    expect(document.body.querySelector('[data-seat-model-menu]')).toBeNull()
+    const row = document.body.querySelector('[data-seat-model-row] button') as HTMLButtonElement
+    expect(row).not.toBeNull()
+    act(() => { row.click() })
+
+    // The model menu is a second floating layer. While it stayed nested in the
+    // panel, the panel's `isolation: isolate` made it a backdrop root and the
+    // menu's backdrop-filter could not sample the page; it must be portaled to
+    // the body and placed, or it would sit on MEASURE_STYLE and read as a
+    // near-clear surface over the panel content.
+    const menu = document.body.querySelector('[data-seat-model-menu]') as HTMLElement
+    expect(menu).not.toBeNull()
+    expect(menu.parentElement).toBe(document.body)
+    expect(menu.style.visibility).not.toBe('hidden')
+    expect(menu.style.left).not.toBe('')
+    // The material must be a real child element with scrolling on an inner
+    // viewport. A ::before layer sized to the padding box left the scrolled rows
+    // uncovered, which read as a transparent lower half of the menu.
+    expect(menu.querySelector('[aria-hidden="true"]')).not.toBeNull()
+    expect(menu.querySelector('[class*="viewport"]')).not.toBeNull()
 
     dispose(root, container)
   })
@@ -216,8 +273,8 @@ describe('thinking slider composer seat', () => {
     }))
     const { container, root } = renderSeat({ directory, select, t })
 
-    openPanel(container)
-    const input = container.querySelector('[data-seat-model-select]') as HTMLSelectElement
+    openPanel()
+    const input = document.body.querySelector('[data-seat-model-select]') as HTMLSelectElement
     const target = [...input.options].find(option => option.textContent === 'DeepSeek-V4-Reasoner')
     expect(target).toBeDefined()
     act(() => { setSelectValue(input, target?.value ?? '') })
@@ -237,8 +294,8 @@ describe('thinking slider composer seat', () => {
     }))
     const { container, root } = renderSeat({ directory, select, t })
 
-    openPanel(container)
-    const input = container.querySelector('[data-seat-model-select]') as HTMLSelectElement
+    openPanel()
+    const input = document.body.querySelector('[data-seat-model-select]') as HTMLSelectElement
     act(() => { setSelectValue(input, input.value) })
 
     expect(select).toHaveBeenCalledWith({
@@ -264,14 +321,14 @@ describe('thinking slider composer seat', () => {
     }))
     const { container, root } = renderSeat({ directory, select, t })
 
-    expect(container.querySelector('[data-seat-trigger]')?.textContent).toContain('跟随模型默认')
-    openPanel(container)
-    const range = container.querySelector('[data-seat-input]') as HTMLInputElement
-    expect(container.querySelector('[data-seat-reasoning]')?.textContent).toContain('跟随模型默认')
+    expect(document.body.querySelector('[data-seat-trigger]')?.textContent).toContain('跟随模型默认')
+    openPanel()
+    const range = document.body.querySelector('[data-seat-input]') as HTMLInputElement
+    expect(document.body.querySelector('[data-seat-reasoning]')?.textContent).toContain('跟随模型默认')
     expect(range.getAttribute('aria-valuetext')).toBe('跟随模型默认')
     expect(range.getAttribute('data-seat-unset')).toBe('true')
-    expect(container.querySelector('[data-seat-active]')).toBeNull()
-    const followDefault = container.querySelector('[data-seat-default]') as HTMLButtonElement
+    expect(document.body.querySelector('[data-seat-active]')).toBeNull()
+    const followDefault = document.body.querySelector('[data-seat-default]') as HTMLButtonElement
     expect(followDefault.getAttribute('aria-pressed')).toBe('true')
 
     act(() => { followDefault.click() })
@@ -284,8 +341,8 @@ describe('thinking slider composer seat', () => {
     const directory = createSnapshotStore(state())
     const { container, root } = renderSeat({ directory, t })
 
-    openPanel(container)
-    expect(container.querySelector('[data-seat-default]')).toBeNull()
+    openPanel()
+    expect(document.body.querySelector('[data-seat-default]')).toBeNull()
     dispose(root, container)
   })
 
@@ -293,19 +350,19 @@ describe('thinking slider composer seat', () => {
     const directory = createSnapshotStore(state())
     const { container, root } = renderSeat({ directory, t })
 
-    openPanel(container)
+    openPanel()
     const outside = document.createElement('button')
     document.body.append(outside)
     act(() => { outside.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })) })
-    expect(container.querySelector('[data-seat-panel]')).toBeNull()
+    expect(document.body.querySelector('[data-seat-panel]')).toBeNull()
     outside.remove()
 
-    openPanel(container)
-    const panel = container.querySelector('[data-seat-panel]') as HTMLDivElement
+    openPanel()
+    const panel = document.body.querySelector('[data-seat-panel]') as HTMLDivElement
     act(() => { panel.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
-    expect(container.querySelector('[data-seat-panel]')).toBeNull()
+    expect(document.body.querySelector('[data-seat-panel]')).toBeNull()
     await Promise.resolve()
-    expect(document.activeElement).toBe(container.querySelector('[data-seat-trigger]'))
+    expect(document.activeElement).toBe(document.body.querySelector('[data-seat-trigger]'))
 
     dispose(root, container)
   })
@@ -315,8 +372,8 @@ describe('thinking slider composer seat', () => {
     const directory = createSnapshotStore(state())
     const { container, root } = renderSeat({ directory, select, t })
 
-    openPanel(container)
-    act(() => { setRangeValue(container.querySelector('[data-seat-input]') as HTMLInputElement, '2') })
+    openPanel()
+    act(() => { setRangeValue(document.body.querySelector('[data-seat-input]') as HTMLInputElement, '2') })
     await Promise.resolve()
     expect(select).toHaveBeenCalledTimes(1)
     dispose(root, container)
@@ -327,23 +384,23 @@ describe('thinking slider composer seat', () => {
     const directory = createSnapshotStore(state({ status: 'selecting' }))
     const { container, root } = renderSeat({ directory, select, t })
 
-    openPanel(container)
-    act(() => { setRangeValue(container.querySelector('[data-seat-input]') as HTMLInputElement, '2') })
+    openPanel()
+    act(() => { setRangeValue(document.body.querySelector('[data-seat-input]') as HTMLInputElement, '2') })
     act(() => { directory.set(state({ status: 'error', error: 'selection rejected' })) })
-    expect(container.textContent).toContain('模型操作失败：selection rejected')
+    expect(document.body.textContent).toContain('模型操作失败：selection rejected')
 
     dispose(root, container)
   })
 })
 
 describe('provider group labels', () => {
-  /** Open the reasoning panel and expand the model menu. */
-  function openModelMenu(container: HTMLDivElement): void {
-    openPanel(container)
-    const row = container.querySelector('[data-seat-model-row] button') as HTMLButtonElement
+  /** Open the reasoning panel and expand the portaled model menu. */
+  function openModelMenu(): void {
+    openPanel()
+    const row = document.body.querySelector('[data-seat-model-row] button') as HTMLButtonElement
     expect(row).not.toBeNull()
     act(() => { row.click() })
-    expect(container.querySelector('[data-seat-model-menu]')).not.toBeNull()
+    expect(document.body.querySelector('[data-seat-model-menu]')).not.toBeNull()
   }
 
   const accountState = () => state({
@@ -358,13 +415,13 @@ describe('provider group labels', () => {
   it('localizes the signed-in account route in the menu and the native select', () => {
     const { container, root } = renderSeat({ directory: createSnapshotStore(accountState()), select: vi.fn().mockResolvedValue(true), t })
 
-    openModelMenu(container)
+    openModelMenu()
     // The registered displayName is English; the heading must not be.
-    const toggle = container.querySelector('[data-seat-model-menu] button') as HTMLButtonElement
+    const toggle = document.body.querySelector('[data-seat-model-menu] button') as HTMLButtonElement
     expect(toggle.textContent).toContain('DeepSeek 账号')
     expect(toggle.textContent).not.toContain('DeepSeek Account')
 
-    const optgroup = container.querySelector('[data-seat-model-select] optgroup') as HTMLOptGroupElement
+    const optgroup = document.body.querySelector('[data-seat-model-select] optgroup') as HTMLOptGroupElement
     expect(optgroup.label).toBe('DeepSeek 账号')
 
     dispose(root, container)
@@ -379,10 +436,10 @@ describe('provider group labels', () => {
       t,
     })
 
-    openModelMenu(container)
-    const toggle = container.querySelector('[data-seat-model-menu] button') as HTMLButtonElement
+    openModelMenu()
+    const toggle = document.body.querySelector('[data-seat-model-menu] button') as HTMLButtonElement
     expect(toggle.textContent).toContain('My Gateway')
-    expect((container.querySelector('[data-seat-model-select] optgroup') as HTMLOptGroupElement).label).toBe('My Gateway')
+    expect((document.body.querySelector('[data-seat-model-select] optgroup') as HTMLOptGroupElement).label).toBe('My Gateway')
 
     dispose(root, container)
   })

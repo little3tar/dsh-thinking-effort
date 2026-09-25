@@ -65,9 +65,14 @@ function createReactPlatform(): Record<string, unknown> {
     createElement: () => ({}),
     Fragment: Symbol.for('react.fragment'),
     useEffect: () => undefined,
+    useLayoutEffect: () => undefined,
     useMemo: (value: () => unknown) => value(),
     useState: (value: unknown) => [value, () => undefined],
   }
+}
+
+function createReactDomPlatform(): Record<string, unknown> {
+  return { createPortal: (node: unknown) => node }
 }
 
 describe('build artifacts', () => {
@@ -86,6 +91,7 @@ describe('build artifacts', () => {
       required.push(specifier)
       if (specifier === 'react') return React
       if (specifier === 'react/jsx-runtime') return { jsx: () => ({}), jsxs: () => ({}) }
+      if (specifier === 'react-dom') return createReactDomPlatform()
       throw new Error(`Unexpected external dependency: ${specifier}`)
     })
 
@@ -95,6 +101,7 @@ describe('build artifacts', () => {
     expect(typeof factory.apply).toBe('function')
     expect(required).toContain('react')
     expect(required).toContain('react/jsx-runtime')
+    expect(required).toContain('react-dom')
   })
 
   it('reads remote.settings through get and subscribes to service availability', () => {
@@ -103,6 +110,7 @@ describe('build artifacts', () => {
     const plugin = descriptor.factory((specifier) => {
       if (specifier === 'react') return React
       if (specifier === 'react/jsx-runtime') return { jsx: () => ({}), jsxs: () => ({}) }
+      if (specifier === 'react-dom') return createReactDomPlatform()
       throw new Error(`Unexpected external dependency: ${specifier}`)
     })
 
@@ -258,13 +266,15 @@ describe('build artifacts', () => {
 
 describe('composer seat surface material', () => {
   /**
-   * The seat's panel and model menu are surfaces of their own, so they must be
-   * opaque. `--dsw-specific-menu` is the core's 58%-translucent menu material
-   * and is only ever painted together with `--dsw-menu-backdrop-filter`; using
-   * it bare left the page text behind the panel readable through it (issue
-   * #14). This asserts on the built artifact because the token choice is a
-   * build-time substitution, and a future edit that reintroduced the
-   * translucent fill would otherwise only show up in a running browser.
+   * The seat's panel and model list are portaled cards painted by a real
+   * `.material` child, the way the official MenuSurface does it. The child is
+   * what makes the frosted material work: a `::before` pseudo sized to the
+   * padding box, so rows scrolled past it lost their background entirely.
+   *
+   * The translucent fill is only correct together with the blur that backs it,
+   * so the pair must survive the build together, and the `@supports` fallback
+   * must stay opaque for engines without `backdrop-filter`. Asserted on the
+   * built artifact because these are build-time token substitutions.
    *
    * The CSS-Modules hash is build-dependent, and lightningcss hashes are not
    * purely alphanumeric — the released 0.3.3 bundle contains `._3_LLuW_panel`,
@@ -273,7 +283,7 @@ describe('composer seat surface material', () => {
    * `-`, so the assertion does not depend on which environment produced the
    * hash.
    */
-  it('paints the panel and menu with an opaque surface token, not the menu fill', () => {
+  it('paints the panel and menu with a real material layer, not a bare translucent fill', () => {
     const bundle = readArtifact('lib/client.js')
     const ruleFor = (local: string): string => {
       const match = new RegExp(`\\.[A-Za-z0-9_-]+_${local}\\{[^}]*\\}`).exec(bundle)
@@ -285,20 +295,24 @@ describe('composer seat surface material', () => {
     // released 0.3.3 bundle, so a hash beginning with `_` must match. Without
     // this, a matcher that only accepted alphanumerics would pass here on a
     // build whose hash happens to be alphanumeric and fail in CI.
-    expect(new RegExp('\\.[A-Za-z0-9_-]+_panel\\{[^}]*\\}').test('._3_LLuW_panel{background:var(--te-panel-surface)}')).toBe(true)
+    expect(new RegExp('\\.[A-Za-z0-9_-]+_panel\\{[^}]*\\}').test('._3_LLuW_panel{isolation:isolate}')).toBe(true)
 
-    const panel = ruleFor('panel')
-    const menu = ruleFor('modelMenu')
-    for (const [local, rule] of [['panel', panel], ['modelMenu', menu]] as const) {
-      expect(rule, `${local} must paint an opaque surface`).toContain('background:var(--te-panel-surface)')
-      expect(rule, `${local} must not use the translucent menu fill`).not.toContain('--dsw-specific-menu')
+    // Each card establishes its own backdrop root and carries no fill of its
+    // own; the `.material` child behind the content owns the painting.
+    for (const local of ['panel', 'modelMenu'] as const) {
+      const rule = ruleFor(local)
+      expect(rule, `${local} must isolate its own backdrop root`).toContain('isolation:isolate')
+      expect(rule, `${local} must not paint a fill over its own material child`).not.toContain('background:')
     }
-    // The surface is defined once on the root (so every descendant inherits a
-    // defined, opaque value) and re-bound to the next layer up by the menu.
-    expect(ruleFor('root')).toContain('--te-panel-surface:var(--dsw-alias-bg-layer-1)')
-    expect(menu).toContain('--te-panel-surface:var(--dsw-alias-bg-layer-2)')
-    // Nothing in this stylesheet may paint the translucent menu material: a
-    // bare `--dsw-specific-menu` is exactly the defect this guards.
-    expect(bundle).not.toMatch(/_root\{[^}]*--dsw-specific-menu/)
+
+    // Opaque where there is no blur to back a translucent fill...
+    expect(ruleFor('material')).toContain('background:var(--dsw-alias-bg-layer-2)')
+    // ...and frosted, with the blur that makes the fill readable, where there is.
+    expect(bundle).toContain('backdrop-filter:var(--dsw-menu-backdrop-filter)')
+    expect(bundle).toContain('var(--dsw-menu-surface-fill)')
+
+    // The defect from issue #14: a bare `--dsw-specific-menu` with no blur
+    // behind it. This stylesheet must never reference it at all.
+    expect(bundle).not.toContain('--dsw-specific-menu')
   })
 })
