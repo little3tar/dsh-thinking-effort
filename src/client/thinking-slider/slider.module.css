@@ -1,31 +1,26 @@
+/* Declared on the document root, not on .root: both cards are portaled to
+   document.body, so they are no longer descendants of the seat root and would
+   read an undefined value. A native range keeps the thumb whole box inside the
+   track, so its centre travels only [half a thumb, width - half a thumb] — the
+   thumb fixes the inset at both ends, and --te-pip-half is half a 14px pip,
+   which is how far the end labels sit out from their pips centres. */
+:root {
+  --te-thumb-inset: 9px;
+  --te-pip-half: 7px;
+  --te-menu-pad: 4px;
+  --te-panel-pad: 12px;
+}
+
 .root {
   position: relative;
   display: flex;
   min-width: 0;
   color: var(--dsw-alias-label-primary);
-
-  --te-panel-surface: var(--dsw-alias-bg-layer-1);
-    /* A native range keeps the thumb whole box inside the track, so its centre
-     travels only [half a thumb, width - half a thumb] — the thumb fixes the
-     inset at both ends, and --te-pip-half is half a 14px pip, which is how
-     far the end labels sit out from their pips centres. */
-  --te-thumb-inset: 9px;
-
-  --te-pip-half: 7px;
-
-  --te-menu-pad: 4px;
-
-  --te-panel-pad: 12px;
-
-  font-size: var(--dsh-content-font-size-secondary, 13px);
-  line-height: calc(20px + var(--dsh-content-font-delta-secondary, 0px));
 }
 
 .panel {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 8px);
-  z-index: 20;
+  position: fixed;
+  z-index: 1100;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -37,10 +32,42 @@
   border: 0;
 
   border-radius: var(--dsw-radius-lg);
-  background: var(--te-panel-surface);
+  isolation: isolate;
   color: var(--dsw-alias-label-primary);
   --dsw-elevation-stroke-color: var(--dsw-alias-border-l1);
   box-shadow: var(--dsw-elevation-prominent);
+
+  /* The panel reads the host's content type scale instead of a fixed size, so
+     it moves with the Settings font-size preference the way the composer and
+     the chat do. Portaled to the body, so it can no longer inherit the seat
+     root's scale; both tokens are defined on body, which is where it now
+     hangs. The fallbacks reproduce today's rendering exactly:
+     `--dsh-content-font-size-secondary` is 13px and
+     `--dsh-content-font-delta-secondary` is 0 at the default 14px body. */
+  font-size: var(--dsh-content-font-size-secondary, 13px);
+  line-height: calc(20px + var(--dsh-content-font-delta-secondary, 0px));
+}
+
+/*
+ * Menu material, mirroring the official MenuSurface: a real absolutely
+ * positioned child (not a ::before pseudo) painted behind the content. The
+ * pseudo-element form left the scrolled region of `.modelMenu` uncovered,
+ * because `inset: 0` sizes to the padding box rather than the scroll extent.
+ */
+.material {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--dsw-alias-bg-layer-2);
+  pointer-events: none;
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .material {
+    background: var(--dsw-menu-surface-fill);
+    backdrop-filter: var(--dsw-menu-backdrop-filter);
+  }
 }
 
 .reasoning {
@@ -118,7 +145,7 @@
   border: 3px solid var(--dsw-alias-border-l2);
   border-radius: 50%;
   corner-shape: round;
-  background: var(--te-panel-surface);
+  background: var(--dsw-menu-surface-fill);
   box-sizing: border-box;
   transform: translate(-50%, -50%);
 }
@@ -161,7 +188,7 @@
   appearance: none;
   border: 3px solid var(--dsw-alias-brand-primary-new-colorprimary-new-color);
   border-radius: 50%;
-  background: var(--te-panel-surface);
+  background: var(--dsw-menu-surface-fill);
   box-shadow: 0 0 0 0 var(--dsw-alias-interactive-bg-hover-accent);
   transition: box-shadow 160ms ease, transform 160ms ease;
 }
@@ -171,7 +198,7 @@
   height: 12px;
   border: 3px solid var(--dsw-alias-brand-primary-new-colorprimary-new-color);
   border-radius: 50%;
-  background: var(--te-panel-surface);
+  background: var(--dsw-menu-surface-fill);
   box-shadow: 0 0 0 0 var(--dsw-alias-interactive-bg-hover-accent);
 }
 
@@ -275,7 +302,7 @@
   flex: 0 0 14px;
   border: 2px solid var(--dsw-alias-border-l1);
   border-radius: 50%;
-  background: var(--te-panel-surface);
+  background: var(--dsw-menu-surface-fill);
   box-sizing: border-box;
   content: '';
 }
@@ -291,7 +318,7 @@
 
 .followDefaultActive::before {
   border-color: var(--dsw-alias-brand-primary-new-colorprimary-new-color);
-  box-shadow: inset 0 0 0 3px var(--te-panel-surface);
+  box-shadow: inset 0 0 0 3px var(--dsw-menu-surface-fill);
   background: var(--dsw-alias-brand-primary-new-colorprimary-new-color);
 }
 
@@ -394,32 +421,38 @@
 }
 
 .modelMenu {
-  position: absolute;
-
-  right: var(--te-panel-pad);
-  bottom: 58px;
-  left: var(--te-panel-pad);
-  z-index: 2;
-
-  max-height: min(220px, 100vh - 96px);
-
-  overflow: auto;
-
-  scrollbar-gutter: stable;
+  position: fixed;
+  z-index: 1101;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: min(304px, calc(100vw - 24px));
+  max-height: min(220px, 100vh - 24px);
+  overflow: hidden;
   padding: var(--te-menu-pad);
   border: 0;
-
   border-radius: var(--dsw-radius-lg);
-
-  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
-  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
-
-  --te-panel-surface: var(--dsw-alias-bg-layer-2);
-  background: var(--te-panel-surface);
+  isolation: isolate;
   box-shadow: var(--dsw-elevation-prominent);
   color: var(--dsw-alias-label-primary);
 }
 
+/* Scrolling lives on this inner viewport, not on the surface itself, so the
+   material layer keeps covering the whole card while the rows scroll: an
+   absolutely positioned child of a scroller scrolls away with the content.
+   `overflow: auto` gives the scrollbar layout width on Windows, so expanding a
+   provider grew the list, the scrollbar appeared, and the whole content box
+   narrowed — pushing every row's trailing chevron left. Reserving the gutter
+   keeps the content width fixed whether or not the list overflows. */
+.modelMenuViewport {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+}
 
 .modelSearch {
   width: 100%;
@@ -432,8 +465,15 @@
   color: var(--dsw-alias-label-primary);
   font: inherit;
   outline: none;
+  /* The card is a flex column capped at 220px, so every child is shrinkable by
+     default and the search box lost 12 of its 32px to the list below it. Only
+     the viewport is meant to absorb the height difference. */
+  flex: none;
 }
 
+.modelSearch::placeholder {
+  color: var(--dsw-alias-label-dimmed);
+}
 
 .modelSearch:focus {
   border-color: var(--dsw-alias-state-business-primary);
@@ -444,26 +484,28 @@
   align-items: center;
   justify-content: space-between;
   width: 100%;
-
-  padding: calc(4px + var(--te-menu-pad)) 7px 2px;
+  padding: 4px 7px 2px;
   border: 0;
   border-radius: var(--dsw-radius-md);
-
-  background: var(--te-panel-surface);
   color: var(--dsw-alias-label-tertiary);
   font-family: inherit;
   font-size: 11px;
-
   font-weight: 500;
   line-height: 16px;
   text-align: left;
   cursor: pointer;
-    /* top: 0 would pin to the scrollport, which is the menu padding box, so the
-     padding itself stayed uncovered and rows scrolled through it. The leading
-     pad carries that offset so the text still clears the menu edge. */
+  /* Sticks while the list scrolls, so the provider name stays readable. The
+     scrollport is now .modelMenuViewport, which carries no padding — the card's
+     own pad and overflow:hidden keep the strip above it clear, so `top: 0`
+     already lands the heading on the menu's inner edge.
+     A translucent fill alone is not enough: the rows scrolling underneath stay
+     readable through it, which is the same defect issue #14 was about. The
+     heading therefore carries the blur as well, and blurs them out. */
   position: sticky;
-  top: calc(-1 * var(--te-menu-pad));
+  top: 0;
   z-index: 1;
+  background: var(--dsw-menu-surface-fill);
+  backdrop-filter: var(--dsw-menu-backdrop-filter);
 }
 
 .modelGroupToggle:hover,
@@ -471,7 +513,7 @@
     /* #ffffff14 in the dark theme — 8% white, fully translucent. The background
      shorthand would replace the fill outright and turn the stuck heading
      see-through, so the token is layered on top of it instead. */
-  background-color: var(--te-panel-surface);
+  background-color: var(--dsw-menu-surface-fill);
   background-image: linear-gradient(var(--dsw-alias-interactive-bg-hover), var(--dsw-alias-interactive-bg-hover));
   outline: 0;
 }

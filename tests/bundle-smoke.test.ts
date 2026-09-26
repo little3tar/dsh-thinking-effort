@@ -80,6 +80,17 @@ function cssVendorPseudo(bundle: string, local: string, pseudo: string): string 
   return match![0]
 }
 
+/**
+ * The same, for a selector that is not a class. The seat's shared geometry
+ * tokens live on the document root — both cards are portaled to `body`, so a
+ * declaration on `.root` would read as undefined inside them.
+ */
+function cssGlobalRule(bundle: string, selector: string): string {
+  const match = new RegExp(`${selector}\\{[^}]*\\}`).exec(bundle)
+  expect(match, `${selector} rule missing from the bundle`).not.toBeNull()
+  return match![0]
+}
+
 function loadDescriptor(source: string): Descriptor {
   let descriptor: Descriptor | undefined
   vm.runInNewContext(source, {
@@ -100,9 +111,14 @@ function createReactPlatform(): Record<string, unknown> {
     createElement: () => ({}),
     Fragment: Symbol.for('react.fragment'),
     useEffect: () => undefined,
+    useLayoutEffect: () => undefined,
     useMemo: (value: () => unknown) => value(),
     useState: (value: unknown) => [value, () => undefined],
   }
+}
+
+function createReactDomPlatform(): Record<string, unknown> {
+  return { createPortal: (node: unknown) => node }
 }
 
 describe('build artifacts', () => {
@@ -121,6 +137,7 @@ describe('build artifacts', () => {
       required.push(specifier)
       if (specifier === 'react') return React
       if (specifier === 'react/jsx-runtime') return { jsx: () => ({}), jsxs: () => ({}) }
+      if (specifier === 'react-dom') return createReactDomPlatform()
       throw new Error(`Unexpected external dependency: ${specifier}`)
     })
 
@@ -130,6 +147,7 @@ describe('build artifacts', () => {
     expect(typeof factory.apply).toBe('function')
     expect(required).toContain('react')
     expect(required).toContain('react/jsx-runtime')
+    expect(required).toContain('react-dom')
   })
 
   it('reads remote.settings through get and subscribes to service availability', () => {
@@ -138,6 +156,7 @@ describe('build artifacts', () => {
     const plugin = descriptor.factory((specifier) => {
       if (specifier === 'react') return React
       if (specifier === 'react/jsx-runtime') return { jsx: () => ({}), jsxs: () => ({}) }
+      if (specifier === 'react-dom') return createReactDomPlatform()
       throw new Error(`Unexpected external dependency: ${specifier}`)
     })
 
@@ -293,13 +312,15 @@ describe('build artifacts', () => {
 
 describe('composer seat surface material', () => {
   /**
-   * The seat's panel and model menu are surfaces of their own, so they must be
-   * opaque. `--dsw-specific-menu` is the core's 58%-translucent menu material
-   * and is only ever painted together with `--dsw-menu-backdrop-filter`; using
-   * it bare left the page text behind the panel readable through it (issue
-   * #14). This asserts on the built artifact because the token choice is a
-   * build-time substitution, and a future edit that reintroduced the
-   * translucent fill would otherwise only show up in a running browser.
+   * The seat's panel and model list are portaled cards painted by a real
+   * `.material` child, the way the official MenuSurface does it. The child is
+   * what makes the frosted material work: a `::before` pseudo sized to the
+   * padding box, so rows scrolled past it lost their background entirely.
+   *
+   * The translucent fill is only correct together with the blur that backs it,
+   * so the pair must survive the build together, and the `@supports` fallback
+   * must stay opaque for engines without `backdrop-filter`. Asserted on the
+   * built artifact because these are build-time token substitutions.
    *
    * The CSS-Modules hash is build-dependent, and lightningcss hashes are not
    * purely alphanumeric — the released 0.3.3 bundle contains `._3_LLuW_panel`,
@@ -308,28 +329,35 @@ describe('composer seat surface material', () => {
    * `-`, so the assertion does not depend on which environment produced the
    * hash.
    */
-  it('paints the panel and menu with an opaque surface token, not the menu fill', () => {
+  it('paints the panel and menu with a real material layer, not a bare translucent fill', () => {
     const bundle = readArtifact('lib/client.js')
 
     // Guard the matcher itself: lightningcss produced `._3_LLuW_panel` in the
     // released 0.3.3 bundle, so a hash beginning with `_` must match. Without
     // this, a matcher that only accepted alphanumerics would pass here on a
     // build whose hash happens to be alphanumeric and fail in CI.
-    expect(new RegExp('\\.[A-Za-z0-9_-]+_panel\\{[^}]*\\}').test('._3_LLuW_panel{background:var(--te-panel-surface)}')).toBe(true)
+    expect(new RegExp('\\.[A-Za-z0-9_-]+_panel\\{[^}]*\\}').test('._3_LLuW_panel{isolation:isolate}')).toBe(true)
 
-    const panel = cssRule(bundle, 'panel')
-    const menu = cssRule(bundle, 'modelMenu')
-    for (const [local, rule] of [['panel', panel], ['modelMenu', menu]] as const) {
-      expect(rule, `${local} must paint an opaque surface`).toContain('background:var(--te-panel-surface)')
-      expect(rule, `${local} must not use the translucent menu fill`).not.toContain('--dsw-specific-menu')
+    // Each card establishes its own backdrop root and carries no fill of its
+    // own; the `.material` child behind the content owns the painting. The
+    // filter cannot live on the card itself: backdrop-filter also makes the
+    // element a containing block for fixed-position descendants, and the model
+    // menu is a second fixed card portalled alongside this one.
+    for (const local of ['panel', 'modelMenu'] as const) {
+      const rule = cssRule(bundle, local)
+      expect(rule, `${local} must isolate its own backdrop root`).toContain('isolation:isolate')
+      expect(rule, `${local} must not paint a fill over its own material child`).not.toContain('background:')
     }
-    // The surface is defined once on the root (so every descendant inherits a
-    // defined, opaque value) and re-bound to the next layer up by the menu.
-    expect(cssRule(bundle, 'root')).toContain('--te-panel-surface:var(--dsw-alias-bg-layer-1)')
-    expect(menu).toContain('--te-panel-surface:var(--dsw-alias-bg-layer-2)')
-    // Nothing in this stylesheet may paint the translucent menu material: a
-    // bare `--dsw-specific-menu` is exactly the defect this guards.
-    expect(bundle).not.toMatch(/_root\{[^}]*--dsw-specific-menu/)
+
+    // Opaque where there is no blur to back a translucent fill...
+    expect(cssRule(bundle, 'material')).toContain('background:var(--dsw-alias-bg-layer-2)')
+    // ...and frosted, with the blur that makes the fill readable, where there is.
+    expect(bundle).toContain('backdrop-filter:var(--dsw-menu-backdrop-filter)')
+    expect(bundle).toContain('var(--dsw-menu-surface-fill)')
+
+    // The defect from issue #14: a bare `--dsw-specific-menu` with no blur
+    // behind it. This stylesheet must never reference it at all.
+    expect(bundle).not.toContain('--dsw-specific-menu')
   })
 })
 
@@ -368,7 +396,7 @@ describe('composer seat affordances', () => {
     expect(lastTick![0]).toContain('transform:translateX(calc(-100% + var(--te-pip-half)))')
     // The offset is half a pip, and the pip is 14px: the 2:1 ratio is what makes
     // a label read as belonging to a dot rather than to a point.
-    expect(cssRule(bundle, 'root')).toContain('--te-pip-half:7px')
+    expect(cssGlobalRule(bundle, ':root')).toContain('--te-pip-half:7px')
     expect(cssRule(bundle, 'rangePip')).toContain('width:14px')
 
     // 45deg points down-right, 225deg is the same arrow turned back up. The
@@ -407,8 +435,12 @@ describe('composer seat affordances', () => {
     const bundle = readArtifact('lib/client.js')
 
     // Half of the 18px thumb Chromium actually renders (range thumbs are
-    // border-box, so the 3px borders are inside that width).
-    expect(cssRule(bundle, 'root')).toContain('--te-thumb-inset:9px')
+    // border-box, so the 3px borders are inside that width). Declared on the
+    // document root, not the seat root: the panel is portaled to `body`, and a
+    // token declared on `.root` resolves to nothing inside it — which would
+    // silently drop the inset at runtime while every rule still reads correctly
+    // in the built artifact.
+    expect(cssGlobalRule(bundle, ':root')).toContain('--te-thumb-inset:9px')
 
     const track = cssRule(bundle, 'rangeTrack')
     expect(track).toContain('left:var(--te-thumb-inset)')
@@ -447,35 +479,41 @@ describe('composer seat affordances', () => {
   /**
    * The official model menu paints its group title with the surface fill, sets
    * the menu's scrollbar tokens, and keeps the title stuck while the list
-   * scrolls. A transparent sticky heading would let the options underneath
-   * show through it.
+   * scrolls. A heading that is only translucent would let the options
+   * underneath show through it.
    */
   it('sticks the provider heading and gives the menu the host scrollbar', () => {
     const bundle = readArtifact('lib/client.js')
 
-    const menu = cssRule(bundle, 'modelMenu')
-    expect(menu).toContain('--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2)')
-    expect(menu).toContain('--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)')
+    // Scrolling moved to the inner viewport — an absolutely positioned child of
+    // a scroller scrolls away with the content, so the material layer has to
+    // hang off the card instead. The scrollbar tokens and the reserved gutter
+    // therefore belong to the viewport, and the card itself no longer scrolls.
+    const viewport = cssRule(bundle, 'modelMenuViewport')
+    expect(viewport).toContain('--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2)')
+    expect(viewport).toContain('--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2)')
     // A classic scrollbar takes layout width, so expanding a provider used to
     // narrow the content box and shift every row's chevron left.
-    expect(menu).toContain('scrollbar-gutter:stable')
+    expect(viewport).toContain('scrollbar-gutter:stable')
+    expect(cssRule(bundle, 'modelMenu')).toContain('overflow:hidden')
 
     const heading = cssRule(bundle, 'modelGroupToggle')
     expect(heading).toContain('position:sticky')
-    // `top: 0` pins to the scrollport, which is the menu's padding box, so the
-    // menu's own top padding stayed uncovered and the options scrolled through
-    // it. The heading offsets by that padding, and its leading pad carries the
-    // same amount on top of the official 4px so the text still clears the
-    // menu's rounded edge once it is stuck there.
-    expect(heading).toContain('top:calc(-1 * var(--te-menu-pad))')
-    expect(heading).toContain('padding:calc(4px + var(--te-menu-pad)) 7px 2px')
+    // The scrollport carries no padding, and the card's own pad plus its
+    // overflow clip the strip above it, so `top: 0` already lands the heading
+    // on the menu's inner edge and the leading pad is the official 4px.
+    expect(heading).toContain('top:0')
+    expect(heading).toContain('padding:4px 7px 2px')
     // The label is one line by construction, so the row is sized by its padding
     // alone (26px, measured) and carries no min-height of its own.
     expect(heading).not.toContain('min-height')
     expect(cssRule(bundle, 'modelMenu')).toContain('padding:var(--te-menu-pad)')
-    expect(cssRule(bundle, 'root')).toContain('--te-menu-pad:4px')
-    // Opaque fill, otherwise the scrolled options read through the heading.
-    expect(heading).toContain('background:var(--te-panel-surface)')
+    expect(cssGlobalRule(bundle, ':root')).toContain('--te-menu-pad:4px')
+    // A translucent fill alone still lets the scrolled options read through it,
+    // which is the defect issue #14 was about in a new place. The heading
+    // therefore carries the same material as the card — fill *and* blur.
+    expect(heading).toContain('background:var(--dsw-menu-surface-fill)')
+    expect(heading).toContain('backdrop-filter:var(--dsw-menu-backdrop-filter)')
     expect(heading).not.toContain('background:transparent')
     // The official group title runs 11px on 16px.
     expect(heading).toContain('line-height:16px')
@@ -484,7 +522,7 @@ describe('composer seat affordances', () => {
   /**
    * `--dsw-alias-interactive-bg-hover` is `#ffffff14` in the dark theme — 8%
    * white, fully translucent. Assigning it to the `background` shorthand
-   * replaced the stuck heading's opaque fill outright, so hovering it made the
+   * replaced the stuck heading's fill outright, so hovering it made the
    * heading see-through and the options underneath showed over it. The token
    * has to be layered on top of the fill instead.
    */
@@ -494,36 +532,45 @@ describe('composer seat affordances', () => {
     expect(match, 'the hover rule missing from the bundle').not.toBeNull()
     const rule = match![0]
 
-    expect(rule).toContain('background-color:var(--te-panel-surface)')
+    expect(rule).toContain('background-color:var(--dsw-menu-surface-fill)')
     expect(rule).toContain('background-image:linear-gradient(var(--dsw-alias-interactive-bg-hover)')
-    // The shorthand would drop the opaque background-color again.
+    // The shorthand would drop the material background-color again.
     expect(rule).not.toMatch(/(^|;)\s*background:\s*var\(--dsw-alias-interactive-bg-hover\)/)
   })
 
   /**
    * The remaining drift from the host's own model menu: the panel pads by
    * 12px like the official composer surface, the heading runs at weight 500,
-   * the option is a border-box flex row centred by height rather than pushed
-   * down by padding, and the menu carries width bounds. Its height keeps this
-   * seat's own 220px: the host's min(360px, …) assumes a fixed menu portalled
-   * to the body, while this one grows up from inside the panel.
+   * and the option is a border-box flex row centred by height rather than
+   * pushed down by padding.
    */
   it('matches the host menu metrics that do not fight this seat layout', () => {
     const bundle = readArtifact('lib/client.js')
 
     const panel = cssRule(bundle, 'panel')
     expect(panel).toContain('padding:var(--te-panel-pad)')
-    // The menu is an absolute child, so its own insets resolve against the
-    // panel's padding box — its border box, since the panel has no border.
-    // Reading the same token is what keeps the two surfaces flush with the
-    // content edges instead of the menu floating a few pixels in.
+    expect(cssGlobalRule(bundle, ':root')).toContain('--te-panel-pad:12px')
+
+    // The menu is a second fixed card placed from the model row's rect, so it
+    // no longer resolves its insets against the panel's padding box and takes a
+    // width of its own. Only the viewport half of a height cap means anything:
+    // the placement pass already clamps it to the space that is left, and the
+    // 220px ceiling is this seat's own, not the host's 360px.
     const menu = cssRule(bundle, 'modelMenu')
-    expect(menu).toContain('left:var(--te-panel-pad)')
-    expect(menu).toContain('right:var(--te-panel-pad)')
-    expect(cssRule(bundle, 'root')).toContain('--te-panel-pad:12px')
+    expect(menu).toContain('position:fixed')
+    expect(menu).toContain('width:min(304px,100vw - 24px)')
+    expect(menu).toContain('max-height:min(220px,100vh - 24px)')
+    expect(menu).not.toMatch(/[^-](min|max)-width:/)
 
     const heading = cssRule(bundle, 'modelGroupToggle')
     expect(heading).toContain('font-weight:500')
+
+    // The card is a flex column capped at 220px, so every child is shrinkable
+    // by default and the search box lost 12 of its 32px to the list below it —
+    // measured 20px in a browser. Only the viewport is meant to absorb the
+    // height difference.
+    expect(cssRule(bundle, 'modelSearch')).toContain('flex:none')
+    expect(cssRule(bundle, 'modelMenuViewport')).toContain('min-height:0')
 
     const option = cssRule(bundle, 'modelOption')
     expect(option).toContain('align-items:center')
@@ -531,14 +578,6 @@ describe('composer seat affordances', () => {
     // No `box-sizing` needed: a button is border-box in the UA sheet already,
     // and with horizontal padding only it makes no difference to the 34px row.
     expect(option).not.toContain('box-sizing')
-
-    // No width bounds, unlike the host's menu: the insets above already fix the
-    // width at the panel's content width, the panel never exceeds 336px, and
-    // the host's `100vw` floor would have to be restated as `100%` to mean
-    // anything here — at which point it can only restate the insets.
-    expect(menu).not.toMatch(/[^-](min|max)-width:/)
-    // The viewport half of the host's cap is kept, the 360px half is not.
-    expect(menu).toContain('max-height:min(220px,100vh - 96px)')
   })
 
   /**
@@ -550,12 +589,16 @@ describe('composer seat affordances', () => {
   it('takes the panel type scale from the host content scale', () => {
     const bundle = readArtifact('lib/client.js')
 
-    const root = cssRule(bundle, 'root')
-    expect(root).toContain('font-size:var(--dsh-content-font-size-secondary,13px)')
-    expect(root).toContain('line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px))')
+    // The panel itself, not the seat root: it is portaled to `body`, so a scale
+    // declared on `.root` can no longer reach it and the card would silently
+    // fall back to the body's 14px.
+    const panel = cssRule(bundle, 'panel')
+    expect(panel).toContain('font-size:var(--dsh-content-font-size-secondary,13px)')
+    expect(panel).toContain('line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px))')
     // A fixed size here is what made the panel ignore the preference.
-    expect(root).not.toMatch(/font-size:13px/)
-    expect(root).not.toMatch(/line-height:20px/)
+    expect(panel).not.toMatch(/font-size:13px/)
+    expect(panel).not.toMatch(/line-height:20px/)
+    expect(cssRule(bundle, 'root')).not.toContain('font-size')
     // The label row is absolutely positioned, so it has to be told how tall it
     // is, and that height has to grow with the same scale.
     expect(cssRule(bundle, 'scale')).toContain('height:calc(20px + var(--dsh-content-font-delta-secondary,0px))')

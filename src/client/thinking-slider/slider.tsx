@@ -4,8 +4,9 @@
  * injected session-selection callback.
  */
 import {
-  createElement, useEffect, useRef, useState, useSyncExternalStore,
+  createElement, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore,
 } from 'react'
+import { createPortal } from 'react-dom'
 import type { ChangeEvent, CSSProperties, KeyboardEvent, ReactNode } from 'react'
 import type { Translation } from '../types.js'
 import css from './slider.module.css'
@@ -86,10 +87,15 @@ export interface SliderProps {
 
 const EMPTY_EFFORTS: readonly ModelReasoningEffort[] = []
 
-interface ModelChoice {
-  readonly key: string
-  readonly provider: string
-  readonly model: ModelCatalogModel
+/**
+ * Unplaced portal card: hidden but laid out at a fixed origin so the placement
+ * pass measures real geometry before the panel is shown. Mirrors the official
+ * composer menu, whose own surface uses the same measure-then-place contract.
+ */
+const MEASURE_STYLE: CSSProperties = {
+  visibility: 'hidden',
+  left: 0,
+  top: 0,
 }
 
 /**
@@ -104,6 +110,12 @@ interface ModelChoice {
  */
 function providerGroupLabel(group: ModelProviderGroup, t: Translation): string {
   return group.id === 'deepseek-account' ? t('providerAccount') : group.name
+}
+
+interface ModelChoice {
+  readonly key: string
+  readonly provider: string
+  readonly model: ModelCatalogModel
 }
 
 /** Resolve the current selection back to its catalog model entry. */
@@ -141,8 +153,13 @@ export function Slider({ directory, load, select, locked = false, t }: SliderPro
   const [modelOpen, setModelOpen] = useState(false)
   const [modelQuery, setModelQuery] = useState('')
   const [expandedModelGroup, setExpandedModelGroup] = useState<string | null>(null)
+  const [panelPos, setPanelPos] = useState<{ left: number; top: number } | null>(null)
+  const [modelMenuPos, setModelMenuPos] = useState<{ left: number; top: number } | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  const modelRowRef = useRef<HTMLButtonElement | null>(null)
+  const modelMenuRef = useRef<HTMLDivElement | null>(null)
   const current = state.current
   const model = currentModelOf(state)
   const modelLabel = current === null
@@ -191,7 +208,12 @@ export function Slider({ directory, load, select, locked = false, t }: SliderPro
   useEffect(() => {
     if (!open) return
     const closeOutside = (event: MouseEvent): void => {
-      if (rootRef.current?.contains(event.target as Node)) return
+      const target = event.target as Node
+      if (rootRef.current?.contains(target)) return
+      // The panel and the model menu are portaled to the body, so neither is
+      // inside rootRef; a press on either must not read as an outside press.
+      if (panelRef.current?.contains(target)) return
+      if (modelMenuRef.current?.contains(target)) return
       setModelOpen(false)
       setModelQuery('')
       setOpen(false)
@@ -199,6 +221,65 @@ export function Slider({ directory, load, select, locked = false, t }: SliderPro
     document.addEventListener('mousedown', closeOutside)
     return () => { document.removeEventListener('mousedown', closeOutside) }
   }, [open])
+
+  useLayoutEffect(() => {
+    if (!open) {
+      // Reopening must re-measure rather than flash the previous placement.
+      setPanelPos(null)
+      return
+    }
+    const place = (): void => {
+      const rect = triggerRef.current?.getBoundingClientRect()
+      if (rect === undefined) return
+      const MARGIN = 12
+      const panel = panelRef.current
+      const width = panel?.offsetWidth ?? 0
+      const height = panel?.offsetHeight ?? 0
+      let left = rect.right - width
+      let top = rect.top - 8 - height
+      if (width > 0) left = Math.min(Math.max(left, MARGIN), window.innerWidth - width - MARGIN)
+      if (height > 0) top = Math.min(Math.max(top, MARGIN), window.innerHeight - height - MARGIN)
+      setPanelPos({ left, top })
+    }
+    place()
+    window.addEventListener('scroll', place, true)
+    window.addEventListener('resize', place)
+    return () => {
+      window.removeEventListener('scroll', place, true)
+      window.removeEventListener('resize', place)
+    }
+  }, [open])
+
+  useLayoutEffect(() => {
+    if (!modelOpen) {
+      // Reopening must re-measure rather than flash the previous placement.
+      setModelMenuPos(null)
+      return
+    }
+    const place = (): void => {
+      const rect = modelRowRef.current?.getBoundingClientRect()
+      if (rect === undefined) return
+      const MARGIN = 12
+      const menu = modelMenuRef.current
+      const width = menu?.offsetWidth ?? 0
+      const height = menu?.offsetHeight ?? 0
+      let left = rect.left
+      let top = rect.bottom + 4
+      if (width > 0) left = Math.min(Math.max(left, MARGIN), window.innerWidth - width - MARGIN)
+      if (height > 0 && top + height > window.innerHeight - MARGIN) {
+        // Flip above the row when the space below cannot hold the list.
+        top = Math.max(MARGIN, rect.top - 4 - height)
+      }
+      setModelMenuPos({ left, top })
+    }
+    place()
+    window.addEventListener('scroll', place, true)
+    window.addEventListener('resize', place)
+    return () => {
+      window.removeEventListener('scroll', place, true)
+      window.removeEventListener('resize', place)
+    }
+  }, [modelOpen])
 
   useEffect(() => {
     if (modelOpen) setExpandedModelGroup(selectedProvider ?? state.groups[0]?.id ?? null)
@@ -260,6 +341,10 @@ export function Slider({ directory, load, select, locked = false, t }: SliderPro
       'aria-expanded': open,
       'aria-label': `${modelLabel}: ${currentEffortLabel}`,
       onClick: () => {
+        if (open) {
+          closeWithFocus()
+          return
+        }
         setOpen(true)
         load?.()
       },
@@ -279,6 +364,7 @@ export function Slider({ directory, load, select, locked = false, t }: SliderPro
       {
         className: css.modelRowButton,
         type: 'button',
+        ref: modelRowRef,
         disabled: busy,
         'aria-haspopup': 'listbox',
         'aria-expanded': modelOpen,
@@ -320,7 +406,15 @@ export function Slider({ directory, load, select, locked = false, t }: SliderPro
   const modelMenu = modelOpen
     ? createElement(
       'div',
-      { className: css.modelMenu, role: 'listbox', 'data-seat-model-menu': 'true', 'aria-label': t('seatModelLabel') },
+      {
+        className: css.modelMenu,
+        role: 'listbox',
+        'data-seat-model-menu': 'true',
+        'aria-label': t('seatModelLabel'),
+        ref: modelMenuRef,
+        style: modelMenuPos ?? MEASURE_STYLE,
+      },
+      createElement('div', { className: css.material, 'aria-hidden': true }),
       createElement('input', {
         className: css.modelSearch,
         'data-seat-model-search': 'true',
@@ -330,40 +424,44 @@ export function Slider({ directory, load, select, locked = false, t }: SliderPro
         'aria-label': t('seatSearchModels'),
         onChange: (event: ChangeEvent<HTMLInputElement>) => { setModelQuery(event.currentTarget.value) },
       }),
-      visibleModelGroups.length === 0
-        ? createElement('div', { className: css.modelNoResults }, t('seatNoModelResults'))
-        : visibleModelGroups.map(({ group, models }) => {
-          const expanded = modelQuery.trim().length > 0 || group.id === expandedModelGroup
-          return createElement(
-            'div',
-            { className: css.modelGroup, key: group.id },
-            createElement('button', {
-              className: css.modelGroupToggle,
-              type: 'button',
-              'aria-expanded': expanded,
-              onClick: () => { setExpandedModelGroup(value => value === group.id ? null : group.id) },
-            },
-            createElement('span', { className: css.modelGroupLabel }, providerGroupLabel(group, t)),
-            createElement('span', { className: expanded ? `${css.modelGroupChevron} ${css.modelGroupChevronOpen}` : css.modelGroupChevron, 'aria-hidden': true }),
-            ),
-            expanded
-              ? models.map((option) => {
-                const choice = choices.find(item => item.provider === group.id && item.model.id === option.id)
-                if (choice === undefined) return null
-                const selected = choice.key === selectedChoice?.key
-                return createElement('button', {
-                  className: selected ? `${css.modelOption} ${css.modelOptionSelected}` : css.modelOption,
-                  type: 'button',
-                  role: 'option',
-                  'aria-selected': selected,
-                  disabled: busy,
-                  onClick: () => { submitModel(choice) },
-                  key: choice.key,
-                }, option.name)
-              })
-              : null,
-          )
-        }),
+      createElement(
+        'div',
+        { className: css.modelMenuViewport },
+        visibleModelGroups.length === 0
+          ? createElement('div', { className: css.modelNoResults }, t('seatNoModelResults'))
+          : visibleModelGroups.map(({ group, models }) => {
+            const expanded = modelQuery.trim().length > 0 || group.id === expandedModelGroup
+            return createElement(
+              'div',
+              { className: css.modelGroup, key: group.id },
+              createElement('button', {
+                className: css.modelGroupToggle,
+                type: 'button',
+                'aria-expanded': expanded,
+                onClick: () => { setExpandedModelGroup(value => value === group.id ? null : group.id) },
+              },
+              createElement('span', { className: css.modelGroupLabel }, providerGroupLabel(group, t)),
+              createElement('span', { className: expanded ? `${css.modelGroupChevron} ${css.modelGroupChevronOpen}` : css.modelGroupChevron, 'aria-hidden': true }),
+              ),
+              expanded
+                ? models.map((option) => {
+                  const choice = choices.find(item => item.provider === group.id && item.model.id === option.id)
+                  if (choice === undefined) return null
+                  const selected = choice.key === selectedChoice?.key
+                  return createElement('button', {
+                    className: selected ? `${css.modelOption} ${css.modelOptionSelected}` : css.modelOption,
+                    type: 'button',
+                    role: 'option',
+                    'aria-selected': selected,
+                    disabled: busy,
+                    onClick: () => { submitModel(choice) },
+                    key: choice.key,
+                  }, option.name)
+                })
+                : null,
+            )
+          }),
+      ),
     )
     : null
 
@@ -435,25 +533,36 @@ export function Slider({ directory, load, select, locked = false, t }: SliderPro
           : null,
       ]
 
-  const panel = open
-    ? createElement(
+  const panelNode = createElement(
+    'div',
+    {
+      className: css.panel,
+      'data-seat-panel': 'true',
+      ref: panelRef,
+      style: panelPos ?? MEASURE_STYLE,
+    },
+    createElement('div', { className: css.material, 'aria-hidden': true }),
+    createElement(
       'div',
-      { className: css.panel, 'data-seat-panel': 'true' },
-      createElement(
-        'div',
-        { className: css.reasoning, 'data-seat-reasoning': 'true' },
-        createElement('span', { className: css.reasoningLabel }, t('seatReasoningLabel')),
-        createElement('span', { className: css.currentEffort }, currentEffortLabel),
-      ),
-      content,
-      modelSelect,
-      modelMenu,
-    )
-    : modelTrigger()
+      { className: css.reasoning, 'data-seat-reasoning': 'true' },
+      createElement('span', { className: css.reasoningLabel }, t('seatReasoningLabel')),
+      createElement('span', { className: css.currentEffort }, currentEffortLabel),
+    ),
+    content,
+    modelSelect,
+  )
 
+  // The trigger stays mounted as the placement anchor (a removed trigger would
+  // leave the panel unmeasurable and therefore stuck at MEASURE_STYLE). The
+  // panel itself is portaled to the body so the menu material's backdrop filter
+  // samples the page instead of the composer's own already-blurred surface.
+  // The model menu is a second floating layer and is portaled the same way, so
+  // its own material samples the page too rather than the panel's backdrop root.
   return createElement(
     'div',
     { className: css.root, ref: rootRef, onKeyDown, 'data-seat-root': 'true' },
-    panel,
+    modelTrigger(),
+    open ? createPortal(panelNode, document.body) : null,
+    open && modelMenu !== null ? createPortal(modelMenu, document.body) : null,
   )
 }

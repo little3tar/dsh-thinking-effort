@@ -5,7 +5,9 @@ import { defineConfig } from 'tsdown'
 import { transform } from 'lightningcss'
 
 const isReactPlatform = (specifier: string): boolean => (
-  specifier === 'react' || specifier === 'react/jsx-runtime'
+  specifier === 'react'
+  || specifier === 'react/jsx-runtime'
+  || specifier === 'react-dom'
 )
 
 /**
